@@ -65,8 +65,7 @@ NormalizeData <- function(object,
         stop("Error! found duplicate samples with same annotation, Please check the sample meta data!")
       }
 
-      message(paste("@Using",initialsample,"as initial sample!",sep = " "))
-      message(paste("@Using",finalsample,"as initial sample!",sep = " "))
+      message(paste("@Using",initialsample,"as initial stage sample! And",finalsample,"as final stage sample!"sep = " "))
       # save results for each compare
       logfc <- log(object@normalized[,finalsample]/object@normalized[,initialsample])
       logfc.res$tmp <- logfc
