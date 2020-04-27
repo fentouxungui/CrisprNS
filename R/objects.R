@@ -12,22 +12,18 @@
 #' @return
 #' @export
 #'
+#'
 #' @examples
 CrisprNS <- setClass(Class = "CrisprNS",
                      slots = list(project = "character",
-                                  raw.data = "data.frame",
-                                  data = "data.frame",
-                                  fc = "data.frame",
-                                  mean = "data.frame",
-                                  meta.data = "data.frame",
-                                  Group = "character", #c("Control","Case"),
-                                  Replicate = "character", #c("rep1","rep2","rep3"),
-                                  Stage = "character", #c("initial","final"))
-                                  library.metadata = "data.frame",
-                                  Gene.Types = "character",
-                                  sgRNA.Index = "data.frame",
-                                  ControlMedian = "numeric",
-                                  QuantileCut = "list",
+                                  sgRNAs.meta.data = "data.frame", # sgRNAs id,gene,sgRNA.Index,and other info from library.metadata
+                                  Samples.meta.data = "data.frame", # Do not change this! colnames: Samples,Group,Replicate,Stage,ControlsgRNAsMedian
+                                  counts = "matrix",
+                                  normalized = "matrix",
+                                  logfc = "matrix",
+                                  logMean = "matrix",
+                                  library.meta.data = "data.frame",
+                                  QuantileCutLog = "list",
                                   version = "ANY"),
                      #package = "",
                      S3methods = FALSE)
@@ -46,296 +42,133 @@ CrisprNS <- setClass(Class = "CrisprNS",
 #' @export
 #'
 #' @examples
-CreateCrisprNSObject <- function(counts,
-                                 project = "CrisprNegativeSelection",
-                                 library.metadata,
-                                 meta.data, # colnames = c("Samples","Group","Replicates","Stage")
-                                 Group, # c("WT","Case"),
-                                 Replicate, # c("rep1","rep2","rep3"),
-                                 Stage # c("day0","day14")
+#' sgRNAs.meta.data <- read.delim("../../../../HCT116cellline/results/mageck/Metabolism.count.txt",stringsAsFactors = FALSE)
+#' library.meta.data <- read.csv("../../../../library/Library2-APC_SL_metabolism+essential+nontargeting.csv",stringsAsFactors = FALSE)
+#' sample.meta.data <- data.frame(Samples = grep("Day",colnames(sgRNAs.meta.data),value = TRUE),
+#'                               Group = factor(c(rep("WT",6),rep("Metabolism",6)),levels = c("WT","Metabolism")),
+#'                               Replicates = factor(rep(paste("rep",1:3,sep = ""),4),levels = c(paste("rep",1:3,sep = ""))),
+#'                               Stage = factor(rep(rep(paste("Day",c(0,14),sep = ""),each = 3),2),levels = c(paste("Day",c(0,14),sep = ""))))
+#' test <- CreateCrisprNSObject(project = "CrisprNegativeSelection",
+#'                             mageck.outputs = sgRNAs.meta.data,
+#'                             library.meta.data = library.meta.data,
+#'                             sample.meta.data = sample.meta.data)
+CreateCrisprNSObject <- function(project = "CrisprNegativeSelection",
+                                 mageck.outputs,
+                                 library.meta.data,
+                                 sample.meta.data # colnames = c("Samples","Group","Replicates","Stage") the last three should be factor!
                                  )
   {
+  # load library
+  suppressMessages(library(dplyr))
+
   # check full parameters!
-  if (is.null(x = meta.data) | is.null(y = Group) | is.null(z = Replicate) | is.null(w = Stage) | is.null(u = library.metadata)) {
+  if (is.null(x = library.meta.data) | is.null(y = mageck.outputs) | is.null(z = sample.meta.data)) {
     stop("Please input full parameters!")
   }
-  # read in counts data - mageck output
-  raw.data <- counts
-  if (!identical(colnames(raw.data)[1:2],c("sgRNA","Gene"))) {
-    stop("please input mageck-output with first colume names: sgRNA and Gene!")
+  # check mageck outputs
+  if (!identical(colnames(mageck.outputs)[1:2],c("sgRNA","Gene"))) {
+    stop("please input mageck-output with first two column names should be sgRNA and Gene!")
   }
-  # check meta.data
-  if (!identical(colnames(meta.data),c("Samples","Group","Replicates","Stage"))) {
-    stop("Please check the meta data file, which should include (Samples,Group,Replicates,Stage)")
+  # check sample meta data
+  BasicSampleinfo <- c("Samples","Group","Replicates","Stage")
+  if (sum(BasicSampleinfo %in% colnames(sample.meta.data)) != length(BasicSampleinfo)) {
+    stop(paste("Please check the sample meta data info, which should include:", paste(BasicSampleinfo,collapse = ","),sep = " "))
   }
-  if (sum(meta.data$Samples %in% colnames(raw.data)) != length(meta.data$Samples) ) {
-    stop("Some samples in metadata did not exist in counts data!")
+  if (sum(sample.meta.data$Samples %in% colnames(mageck.outputs)) != length(sample.meta.data$Samples) ) {
+    stop("Some samples in sample meta data did not exist in the mageck outputs!")
   }
   # check library meta data
-  if (!identical(colnames(library.metadata)[1:3],c("ID","Type","Gene"))) {
-     stop("The library meta data should start with ID,TYPE,Gene!")
-   }
-  Gene.Types <- unique(library.metadata$Type)
-  message(paste(length(Gene.Types),"Types of Genes are found in library:"))
-  CountStats <- table(library.metadata$Type)
+  keys <- c("ID","Type","Gene")
+  if (sum(keys %in% colnames(library.meta.data)) != length(keys)) {
+     stop(paste("The library meta data should include:",paste(keys,collapse = ","),sep = " "))
+  }
+  # check library meta data - Gene types
+  message("Checking Gene types in libraray meta data!")
+  GeneTypes <- unique(library.meta.data$Type)
+  message(paste(length(GeneTypes),"types of Genes are found in library:"))
+  CountStats <- table(library.meta.data$Type)
   message(paste(names(CountStats),collapse = ", "))
   message(paste(as.vector(CountStats),collapse = ", "))
-  sgRNA.Index <- data.frame(row.names = raw.data$sgRNA)
-  for (type in Gene.Types) {
-    choosen <- dplyr::filter(library.metadata,Type == type)
-    sgRNA.Index$tmp <- raw.data$Gene %in% choosen$Gene
-    colnames(sgRNA.Index)[which(colnames(sgRNA.Index) == "tmp")] <- type
+  message(paste("Total",length(library.meta.data$ID),"sgRNAs are found, which corresponding to",length(unique(library.meta.data$Gene)),"genes!",sep = " "))
+  message(paste(rep("-",50),sep = ""))
+
+  # check if all the sgRNAs detected are found in library meta data
+  message("Checking sgRNAs found in Mageck-outputs!")
+  sgRNAs.meta.data <- mageck.outputs[,c("sgRNA","Gene")]
+  if (sum(sgRNAs.meta.data$sgRNA %in% library.meta.data$ID) != length(sgRNAs.meta.data$sgRNA)) {
+    sgRNAs.lost <- sgRNAs.meta.data$sgRNA[!sgRNAs.meta.data$sgRNA %in% library.meta.data$ID]
+    message(paste("Attention! some sgRNAs are not found in library:",paste(sgRNAs.lost,collapse = ","),sep = " "))
+    message("This may be a bug caused by R or Linux ~")
+    message(paste("From the Mageck-output, Total",length(sgRNAs.meta.data$sgRNA),"are found, which corresponding to",length(unique(sgRNAs.meta.data$Gene)),"genes!",sep = " "))
+  } else{
+    message(paste("From the Mageck-output, Total",length(sgRNAs.meta.data$sgRNA),"are found, which corresponding to",length(unique(sgRNAs.meta.data$Gene)),"genes!",sep = " "))
   }
-  # Add some function to tell how many sgRNAs/Genes are found in the raw.data
+  message(paste(rep("-",50),sep = ""))
+
+  # filter library meta data and add types and other infos to sgRNAs meta data
+  ## remove shared 'Gene' column from library meta data
+  library.meta.data.part <- library.meta.data[,!(colnames(library.meta.data) == "Gene")]
+  ## add infos to sgRNAs meta data
+  sgRNAs.ID <- sgRNAs.meta.data$sgRNA
+  sgRNAs.meta.data <- merge(sgRNAs.meta.data,library.meta.data.part,all.x = TRUE,by.x = "sgRNA", by.y = "ID",sort = FALSE)
+  rownames(sgRNAs.meta.data) <- sgRNAs.meta.data$sgRNA
+  sgRNAs.meta.data <- sgRNAs.meta.data[sgRNAs.ID,]
+
+  ## in case of NA in sgRNAs.meta.data - this may caused by a bug in R or Linux!
+  if (NA %in% sgRNAs.meta.data$Type) {
+    NAindex <- which(is.na(sgRNAs.meta.data$Type))
+    NAGene <- sgRNAs.meta.data$Gene[NAindex]
+    columns <- which(colnames(sgRNAs.meta.data) != "sgRNA")
+    for (i in 1:length(NAindex)) {
+      if (!NAGene %in% sgRNAs.meta.data$Gene) {
+        stop("Error! Sorry! the Gene infos of the lost sgRNAs can not be filled with sgRNAs from same Gene!")
+      }
+      sgRNAs.meta.data[NAindex[i],columns] <- sgRNAs.meta.data[sgRNAs.meta.data$Gene == NAGene,columns][1,]
+      message(paste("Attention! infos of sgRNA",sgRNAs.meta.data$sgRNA[NAindex[i]],"is filled using other sgRNAs from same gene for the NA value!",sep = " "))
+    }
+    message(paste(rep("-",50),sep = ""))
+  }
 
 
+  # preprocess the Sample meta data
+  rownames(sample.meta.data) <- sample.meta.data$Samples
+  sample.meta.data <- sample.meta.data[,(!colnames(sample.meta.data) == "Samples")]
+  # set first level as control or initial stage!
+  ## Group set
+  if (length(unique(sample.meta.data$Group)) == 1) {
+    message(paste("Only on Group is found:",levels(sample.meta.data$Group),"!",sep = " "))
+  } else {
+    message(paste(length(unique(sample.meta.data$Group)),"Groups are found:",paste(levels(sample.meta.data$Group),collapse = ", "),"!",sep = " "))
+    message(paste("Default using",levels(sample.meta.data$Group)[1],"as the control sample!",sep =" "))
+    message("You can use relvel(objcet@sample.meta.data$Group) to reset Group, the first level will be set as the control!")
+  }
+  message(paste(rep("-",50),sep = ""))
+
+  ## Replicate set
+  if (length(unique(sample.meta.data$Replicates)) == 1) {
+    message(paste("Only on Replicate is found:",levels(sample.meta.data$Replicates),"!",sep = " "))
+  } else {
+    message(paste(length(unique(sample.meta.data$Replicates)),"Replicates are found:",paste(levels(sample.meta.data$Replicates),collapse = ", "),"!",sep = " "))
+  }
+  message(paste(rep("-",50),sep = ""))
+
+  ## Stage set
+  if (length(unique(sample.meta.data$Stage)) != 2) {
+    stop("Stage set is wrong, Please define two stages: initital stage and final stage!")
+  } else {
+    message(paste(length(unique(sample.meta.data$Stage)),"Stages are found:",paste(levels(sample.meta.data$Stage),collapse = ", "),"!",sep = " "))
+    message(paste(levels(sample.meta.data$Stage)[1],"is set as the initial stage, and ",levels(sample.meta.data$Stage)[2],"is set as the final stage!",sep = " "))
+    message("You can use relvel(objcet@sample.meta.data$Stage) to reset stage, the first level will be set as the initial stage!")
+  }
+  message(paste(rep("-",50),sep = ""))
 
   # create object
   object <- new(
     Class = "CrisprNS",
-    raw.data = raw.data,
-    meta.data = meta.data,
-    Group = Group,
-    Replicate = Replicate,
-    Stage = Stage,
-    library.metadata = library.metadata,
-    Gene.Types = Gene.Types,
-    sgRNA.Index = sgRNA.Index
-  )
-  return(object)
-}
-
-#' Normalize raw data counts
-#'
-#' @param object
-#' @param initialStage
-#' @param controlsgRNA
-#'
-#' @return
-#' @export
-#'
-#' @examples
-NormalizeData <- function(object,
-                          initialStage = "Day0",
-                          controlsgRNA = "nontargeting"){
-  if (class(object) != "CrisprNS") {
-    stop("Error, Please input a CrisprNS Object created by CreateCrisprNSObject function")
-  }
-  Groups <- object@Group
-  Replicates <- object@Replicate
-  Genetypes <- object@Gene.Types
-  if (!controlsgRNA %in% Genetypes) {
-    stop("Error, Please define correct genetypes form Gene.Types slot!")
-  }
-  if (!initialStage %in% object@Stage) {
-    stop("Error! the initial stage not exist in predefined Stages!")
-  }
-  # Normalize to same library size
-  message("1. Normalizing to same library size for each sample!")
-  samples <- object@meta.data$Samples
-  rawdata <- as.data.frame(object@raw.data[,samples])
-  tmpdata <- as.data.frame(apply(rawdata,2,function(x)((x/sum(x))*1e6 + 1)))
-  object@data <- tmpdata
-  # Calculate Foldchange for each pair (final stage vs initial stage)
-  message("2. Calculate Foldchange for each pair (final stage vs initial stage)")
-  finalStage <- setdiff(object@Stage,initialStage)
-  res.tmp <- data.frame(row.names = 1:length(rownames(tmpdata)))
-  for (groupinfo in Groups) {
-    for (replicateinfo in Replicates) {
-      initialsample <- extracname(samples,x=groupinfo,y = replicateinfo,z = initialStage)
-      finalsample <- extracname(samples,x=groupinfo,y = replicateinfo,z = finalStage)
-      logfc <- log(tmpdata[,finalsample]/tmpdata[,initialsample])
-      res.tmp$tmp <- logfc
-      compareName <- gsub(initialStage,paste(finalStage,"vs",initialStage,sep = "."),initialsample)
-      colnames(res.tmp)[which(colnames(res.tmp) == "tmp")] <- compareName
-    }
-  }
-  # Normalizing logFC to the median control sgRNAs
-  message("3. Normalizing logFC to the median control sgRNAs!")
-  ControlMedian <- as.numeric(apply(res.tmp[object@sgRNA.Index[,controlsgRNA],],2,median))
-  object@ControlMedian <- ControlMedian
-  for (i in 1:length(ControlMedian)) {
-    message(paste(colnames(res.tmp)[i],":",ControlMedian[i],sep = " "))
-  }
-  res.tmp <- sweep(res.tmp,2,ControlMedian,"-")
-  object@fc <- res.tmp
+    sgRNAs.meta.data = sgRNAs.meta.data,
+    Samples.meta.data = sample.meta.data,
+    counts = as.matrix(mageck.outputs[,rownames(sample.meta.data)]),
+    library.meta.data = library.meta.data)
 
   return(object)
-}
-
-
-extracname <- function(vector,x,y,z="."){
-  tmp <- vector
-  for (i in c(x, y, z)) {
-    tmp <- grep(i, tmp, value = TRUE)
-  }
-  return(tmp)
-}
-
-#' Draw scatter plot
-#'
-#' @param object
-#' @param xSample
-#' @param ySample
-#' @param limitation
-#' @param breaks
-#'
-#' @return
-#' @export
-#'
-#' @examples
-DrawFC <- function(object,
-                   Replicate = NULL,
-                   xSample = "xsample",
-                   ySample = "ysample",
-                   limitation = c(-4,4),
-                   breaks = c(-4,-3,-2,-1,0,1,2,3,4)){
-  if (is.null(Replicate)) {
-    if (!xSample %in% colnames(object@fc) | !ySample %in% colnames(object@fc)) {
-      stop("Error! Please input correct samples names defined in fc slot!")
-    }
-    tmp.data <- object@fc[,c(xSample,ySample)]
-  } else {
-    if (!Replicate %in% object@Replicate) {
-      stop("Error! Please input correct replicate names defined in Replicate slot!")
-    }
-    xSample = extracname(colnames(object@fc),Replicate,object@Group[1])
-    ySample = extracname(colnames(object@fc),Replicate,object@Group[2])
-    tmp.data <-object@fc[,c(xSample,ySample)]
-  }
-
-  p0 <- ggplot2::ggplot(tmp.data, aes(x=get(xSample), y=get(ySample))) +
-    geom_vline(xintercept = 0) + geom_hline(yintercept = 0) +
-    geom_point(size = 0.3,color = "#bed2ed") +
-    #lims(x = limitation, y = limitation) +
-    theme_minimal() +
-    coord_fixed() +
-    scale_x_continuous( breaks = breaks, limits = limitation) +
-    scale_y_continuous( breaks = breaks, limits = limitation) +
-    labs(x = xSample, y = ySample, title="Total sgRNAs")
-
-  Genetypes <- object@Gene.Types
-  GeneIndex <- object@sgRNA.Index
-
-  for (i in 1:length(Genetypes)) {
-    p <- ggplot2::ggplot(tmp.data, aes(x=get(xSample), y=get(ySample))) +
-      geom_vline(xintercept = 0) + geom_hline(yintercept = 0) +
-      geom_point(size = 0.3,color = "#bed2ed") +
-      #lims(x=c(-6,6),y=c(-6,6)) +
-      geom_point(tmp.data = tmp.data[GeneIndex[,Genetypes[i]],],size = 0.3,color = "red") +
-      theme_minimal() +
-      coord_fixed() +
-      scale_x_continuous(breaks = breaks, limits = limitation) +
-      scale_y_continuous(breaks = breaks, limits = limitation) +
-      labs(x = xSample, y = ySample, title= paste("Highlight",Genetypes[i], "sgRNAs",sep = " "))
-    assign(paste("p",i,sep = ""),p)
-  }
-
-  p.res <- c()
-
-  for (i in 0:length(Genetypes)) {
-    p.res <- append(p.res, paste("p",i,sep = ""))
-  }
-  ggpubr::ggarrange(plotlist =  mget(p.res),labels = LETTERS[1:(1+length(Genetypes))],nrow = ceiling((1+length(Genetypes))/2),ncol = 2)
-}
-
-QuantileCut <- function(object,
-                        Replicate = NULL,
-                        xSample = "xsample",
-                        ySample = "ysample",
-                        controlsgRNA = "nontargeting",
-                        quantile.cut = c(0.95, 0.95),
-                        limitation = c(-1,1),
-                        breaks = c(-2,-1.5,-1,-0.5,-0.2,-0.1,0,0.1,0.2,0.5,1,1.5,2)){
-  if (!controlsgRNA %in% object@Gene.Types) {
-    stop("Error, Please define correct genetypes form Gene.Types slot!")
-  }
-  if (is.null(Replicate)) {
-    if (!xSample %in% colnames(object@fc) | !ySample %in% colnames(object@fc)) {
-      stop("Error! Please input correct samples names defined in fc slot!")
-    }
-    tmp.data <- object@fc[,c(xSample,ySample)]
-  } else {
-    if (!Replicate %in% object@Replicate) {
-      stop("Error! Please input correct replicate names defined in Replicate slot!")
-    }
-    xSample = extracname(colnames(object@fc),Replicate,object@Group[1])
-    ySample = extracname(colnames(object@fc),Replicate,object@Group[2])
-    tmp.data <-object@fc[,c(xSample,ySample)]
-  }
-  controlsgRNAdata <- tmp.data[object@sgRNA.Index[,controlsgRNA],]
-  distance.cut.table <- sqrt(apply(apply(controlsgRNAdata,2,function(x)(x*x)),2,function(x)quantile(x, quantile.cut)))
-  distance.cut <- c(distance.cut.table[1,1],distance.cut.table[2,2])
-  # cut.info <- data.frame(row.names = colnames(tmp.data))
-  # cut.info <- cbind(cut.info,quantile.cut,distance.cut)
-  # object@QuantileCut <- append(object@QuantileCut,list(tmp = cut.info))
-  # names(object@QuantileCut)[which(names(object@QuantileCut) == "tmp")] <- paste(xSample,"and",ySample,"using",controlsgRNA,"As-reference",sep = "-")
-  message("Distance to origin Cutoff:")
-  message(paste(xSample,distance.cut[1],sep = ": "))
-  message(paste(ySample,distance.cut[2],sep = ": "))
-  sgRNAIndex <- which(abs(tmp.data[,1]) < distance.cut[1] & tmp.data[,2] <  distance.cut[2]*(-1))
-  tmp.data <- cbind(object@raw.data[,1:2],tmp.data)
-  # check sgRNA position!
-  p <- ggplot2::ggplot(tmp.data, aes(x=get(xSample), y=get(ySample))) +
-    geom_vline(xintercept = 0) + geom_hline(yintercept = 0) +
-    geom_hline(yintercept = -distance.cut[2],colour = "black",linetype = "dotted") +
-    geom_vline(xintercept = c(-distance.cut[1],distance.cut[1]),colour = "black",linetype = "dotted") +
-    geom_point(size = 0.3,color = "#bed2ed") +
-    #lims(x=c(-6,6),y=c(-6,6)) +
-    geom_point(data = tmp.data[sgRNAIndex,],size = 0.3,color = "red") +
-    theme_minimal() +
-    coord_fixed() +
-    scale_x_continuous(breaks = breaks, limits = limitation) +
-    scale_y_continuous(breaks = breaks, limits = limitation) +
-    labs(x = xSample, y = ySample, title= paste("Highlight selected sgRNAs",sep = " "))
-  print(p)
-  pdf(file = paste("Highlight selected sgRNAs for",xSample,"and",ySample,".pdf",sep = " "),width = 8,height = 8)
-  print(p)
-  dev.off()
-  selected.data <- tmp.data[sgRNAIndex,]
-  selected.data <- merge(selected.data,object@library.metadata, all.x = TRUE, by.x = "sgRNA",by.y = "ID")
-  return(selected.data)
-}
-
-
-BatchQuantileCut <- function(object,
-                             Replicates = "ALL",
-                             controlsgRNA = "nontargeting",
-                             quantile.cut = c(0.95, 0.95),
-                             limitation = c(-1,1),
-                             breaks = c(-2,-1.5,-1,-0.5,-0.2,-0.1,0,0.1,0.2,0.5,1,1.5,2)){
-  if (Replicates == "ALL") { Replicates <- object@Replicate}
-  for (replicates in Replicates) {
-    message(paste("> Handling",replicates,":",sep = " "))
-    eachRep <- QuantileCut(object,
-                Replicate = replicates,
-                controlsgRNA = controlsgRNA,
-                quantile.cut = quantile.cut,
-                limitation = limitation,
-                breaks = breaks)
-    eachRep <- eachRep[,1:5]
-    colnames(eachRep) <- c("sgRNA","Gene",object@Group,"Type")
-    eachRep$Replicate <- replicates
-    if (exists("merged")) {
-      merged <- rbind(merged,eachRep)
-    }else{
-      merged <- eachRep
-    }
-  }
-  return(merged)
-}
-
-#' Static Genes in all replicates
-#'
-#' @param AnDataFrame
-#'
-#' @return
-#' @export
-#'
-#' @examples
-staticsgRNAs <- function(AnDataFrame){
-  tmp <- reshape2::dcast(AnDataFrame,Gene~Replicate)
-  tmp$sum <- apply(tmp[2:length(colnames(tmp))],1, sum)
-  tmp <- dplyr::arrange(tmp,desc(sum))
-  return(tmp)
 }

@@ -5,13 +5,10 @@
 \title{Create a Crispr Negative Selection Object}
 \usage{
 CreateCrisprNSObject(
-  counts,
   project = "CrisprNegativeSelection",
-  library.metadata,
-  meta.data,
-  Group,
-  Replicate,
-  Stage
+  mageck.outputs,
+  library.meta.data,
+  sample.meta.data
 )
 }
 \arguments{
@@ -22,4 +19,16 @@ CreateCrisprNSObject(
 }
 \description{
 Create a Crispr Negative Selection Object
+}
+\examples{
+sgRNAs.meta.data <- read.delim("../../../../HCT116cellline/results/mageck/Metabolism.count.txt",stringsAsFactors = FALSE)
+library.meta.data <- read.csv("../../../../library/Library2-APC_SL_metabolism+essential+nontargeting.csv",stringsAsFactors = FALSE)
+sample.meta.data <- data.frame(Samples = grep("Day",colnames(sgRNAs.meta.data),value = TRUE),
+                              Group = factor(c(rep("WT",6),rep("Metabolism",6)),levels = c("WT","Metabolism")),
+                              Replicates = factor(rep(paste("rep",1:3,sep = ""),4),levels = c(paste("rep",1:3,sep = ""))),
+                              Stage = factor(rep(rep(paste("Day",c(0,14),sep = ""),each = 3),2),levels = c(paste("Day",c(0,14),sep = ""))))
+test <- CreateCrisprNSObject(project = "CrisprNegativeSelection",
+                            mageck.outputs = sgRNAs.meta.data,
+                            library.meta.data = library.meta.data,
+                            sample.meta.data = sample.meta.data)
 }

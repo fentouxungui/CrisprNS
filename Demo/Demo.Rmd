@@ -1,0 +1,90 @@
+---
+title: "Demo"
+author: "Zhang Yongchao"
+date: "April 27, 2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# A demo for using CrisprNS package
+
+```{r}
+
+```
+
+## read in mageck-putput and sgRNA library meta data.
+
+```{r}
+mageckOutput <- read.delim("../../../../../HCT116cellline/results/mageck/Metabolism.count.txt",stringsAsFactors = FALSE)
+head(mageckOutput)
+sgRNA.meta.data <- read.csv("../../../../../library/Library2-APC_SL_metabolism+essential+nontargeting.csv",stringsAsFactors = FALSE)
+head(sgRNA.meta.data)
+```
+
+## prepare sample meta data
+
+```{r}
+sample.meta.data <- data.frame(Samples = grep("Day",colnames(mageckOutput),value = TRUE),
+                        Group = factor(c(rep("WT",6),rep("Metabolism",6)),levels = c("WT","Metabolism")),
+                        Replicates = factor(rep(paste("rep",1:3,sep = ""),4),levels = c(paste("rep",1:3,sep = ""))),
+                        Stage = factor(rep(rep(paste("Day",c(0,14),sep = ""),each = 3),2),levels = c(paste("Day",c(0,14),sep = ""))))
+```
+
+
+## Create a CrisprNS object
+
+```{r}
+test <- CreateCrisprNSObject(project = "CrisprNegativeSelection",
+                     mageck.outputs = mageckOutput,
+                     library.meta.data = sgRNA.meta.data,
+                     sample.meta.data = sample.meta.data)
+```
+
+## Normalize data
+
+This will generate Normalized, logFC, logMean slots.
+
+```{r}
+test <- NormalizeData(test,initialStage = "Day0",controlsgRNA = "nontargeting")
+```
+
+## Visualization and selection
+
+### Paired mode
+
+#### two samples: logFC-logFC scatter plot
+
+```{r fig.height=8,fig.width=8}
+DrawPaired(test,Replicate = "rep2")
+compares <- colnames(test@logfc)
+DrawPaired(test,xSample = compares[2],ySample = compares[4])
+```
+
+#### selection
+
+```{r fig.width=4,fig.height=4}
+head(QuantileCutPair(test,Replicate = "rep1"))
+head(QuantileCutPair(test,Replicate = "rep1",Groups = c("Metabolism","WT")))
+head(QuantileCutPair(test,Replicate = "rep1",Groups = c("WT","Metabolism")))
+selected <- BatchQuantileCutPair(test)
+head(static(selected,formula.x = "Replicate"))
+```
+
+### Single mode
+
+#### One sample: logFC-logMean scatter plot
+
+```{r fig.width=8,fig.height=8}
+DrawSingle(test,Replicate = "rep1",Group = "WT")
+```
+
+#### selection
+
+```{r fig.height=4,fig.width=4}
+head(CutSingle(test,Replicate = "rep1",Group = "WT",Quantile.control = 1))
+b <- BatchCutSingle(test)
+head(static(b,formula.y = "Type",formula.x = "Replicate"))
+head(static(b,formula.y = "Type",formula.x = c("Replicate","Group")))
+```
