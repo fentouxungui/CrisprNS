@@ -13,7 +13,7 @@ library(CrisprNS)
 ```
 ## Using
 
-You can refer to this [demo]().
+You can refer to this [demo](https://github.com/fentouxungui/CrisprNS/tree/master/Demo).
 
 ## Contatct
 
